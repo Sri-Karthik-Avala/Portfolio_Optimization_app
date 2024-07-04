@@ -12,7 +12,7 @@ stocks = ['HCLTECH.NS', 'ADANIENT.NS', 'TECHM.NS', 'INFY', 'WIPRO.NS',
           'OFSS.NS', 'MPHASIS.NS', 'LTIM.NS', 'PERSISTENT.NS', 'TCS.NS']
 initial_investment = 50000  # 50k INR initial investment per stock
 
-# Fetch historical data function
+# Fetch historical data function with timezone handling
 def fetch_data(stocks, start_date, end_date):
     data = pd.DataFrame()
     for stock in stocks:
