@@ -17,7 +17,9 @@ def fetch_data(stocks, start_date, end_date):
     data = pd.DataFrame()
     for stock in stocks:
         stock_data = yf.download(stock, start=start_date, end=end_date)
-        data[stock] = stock_data['Open']
+        if not stock_data.empty:
+            stock_data.index = stock_data.index.tz_localize(None)  # Remove timezone info if any
+            data[stock] = stock_data['Open']
     return data
 
 # Calculate portfolio value function
