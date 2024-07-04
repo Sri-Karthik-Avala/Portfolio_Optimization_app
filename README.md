@@ -1,6 +1,3 @@
-Here's a sample README file for your GitHub repository:
-
----
 
 # Portfolio Analysis App
 
