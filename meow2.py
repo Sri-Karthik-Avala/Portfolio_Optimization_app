@@ -12,14 +12,12 @@ stocks = ['HCLTECH.NS', 'ADANIENT.NS', 'TECHM.NS', 'INFY', 'WIPRO.NS',
           'OFSS.NS', 'MPHASIS.NS', 'LTIM.NS', 'PERSISTENT.NS', 'TCS.NS']
 initial_investment = 50000  # 50k INR initial investment per stock
 
-# Fetch historical data function with timezone handling
+# Fetch historical data function
 def fetch_data(stocks, start_date, end_date):
     data = pd.DataFrame()
     for stock in stocks:
         stock_data = yf.download(stock, start=start_date, end=end_date)
-        if not stock_data.empty:
-            stock_data.index = stock_data.index.tz_localize(None)  # Remove timezone info if any
-            data[stock] = stock_data['Open']
+        data[stock] = stock_data['Open']
     return data
 
 # Calculate portfolio value function
