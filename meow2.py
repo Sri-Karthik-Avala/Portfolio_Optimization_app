@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.express as px
+from scipy.optimize import minimize
 
 # Set option to suppress matplotlib warnings
 st.set_option('deprecation.showPyplotGlobalUse', False)
@@ -61,6 +62,37 @@ def plot_daily_weight_changes(data):
     fig = px.line(daily_returns, x=daily_returns.index, y=stocks, title='Daily Weight Changes (%)', labels={'index': 'Date', 'value': 'Daily Weight Change (%)'})
     return fig
 
+# Optimize portfolio function
+def optimize_portfolio(returns):
+    # Number of assets
+    num_assets = len(returns.columns)
+    
+    # Mean returns and covariance matrix
+    mean_returns = returns.mean()
+    cov_matrix = returns.cov()
+    
+    # Risk-free rate
+    risk_free_rate = 0
+    
+    # Objective function: negative Sharpe ratio
+    def neg_sharpe_ratio(weights, mean_returns, cov_matrix, risk_free_rate):
+        portfolio_return = np.dot(weights, mean_returns)
+        portfolio_std = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
+        return -(portfolio_return - risk_free_rate) / portfolio_std
+
+    # Constraints and bounds
+    constraints = ({'type': 'eq', 'fun': lambda weights: np.sum(weights) - 1})
+    bounds = tuple((0, 1) for _ in range(num_assets))
+    
+    # Initial guess (equal distribution)
+    init_guess = num_assets * [1. / num_assets]
+    
+    # Optimize
+    opt_result = minimize(neg_sharpe_ratio, init_guess, args=(mean_returns, cov_matrix, risk_free_rate), 
+                          method='SLSQP', bounds=bounds, constraints=constraints)
+    
+    return opt_result.x
+
 # Page 1: Homepage
 def page_home():
     st.title('Welcome to Portfolio Analysis')
@@ -81,6 +113,17 @@ def page_portfolio_optimization():
     # Forward fill any missing data
     basedata = basedata.ffill()
     
+    # Calculate daily returns
+    returns = calculate_daily_returns(basedata)
+    
+    # Optimize portfolio
+    opt_weights = optimize_portfolio(returns)
+    
+    # Display optimal weights
+    st.subheader('Optimal Portfolio Weights')
+    opt_weights_df = pd.DataFrame(opt_weights, index=stocks, columns=['Weight'])
+    st.write(opt_weights_df)
+    
     # Calculate portfolio values and weights
     basedata, weights = calculate_portfolio_value(initial_investment, basedata)
     
@@ -91,11 +134,6 @@ def page_portfolio_optimization():
     # Display table of data
     st.subheader('Portfolio Data')
     st.write(basedata)
-
-    # Display weights table
-    st.subheader('Initial Stock Weights')
-    weights_df = pd.DataFrame(weights.values, index=weights.index, columns=['Weight'])
-    st.write(weights_df)
 
 # Page 3: Analysis
 def page_analysis():
