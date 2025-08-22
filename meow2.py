@@ -11,36 +11,138 @@ st.set_option('deprecation.showPyplotGlobalUse', False)
 warnings.filterwarnings('ignore')
 
 # Define stocks and initial investment
-stocks = ['HCLTECH.NS', 'ADANIENT.NS', 'TECHM.NS', 'INFY', 'WIPRO.NS', 
+stocks = ['HCLTECH.NS', 'ADANIENT.NS', 'TECHM.NS', 'INFY.NS', 'WIPRO.NS', 
           'OFSS.NS', 'MPHASIS.NS', 'LTIM.NS', 'PERSISTENT.NS', 'TCS.NS']
 initial_investment = 50000  # 50k INR initial investment per stock
 
-# Fetch historical data function with error handling
+# Alternative stock symbols to try if main ones fail
+alternative_stocks = {
+    'HCLTECH.NS': ['HCLTECH.BO', 'HCL-TECH.NS'],
+    'ADANIENT.NS': ['ADANIENT.BO', 'ADANIENT.NSE'],
+    'TECHM.NS': ['TECHM.BO', 'TECH-M.NS'],
+    'INFY.NS': ['INFY.BO', 'INFY'],
+    'WIPRO.NS': ['WIPRO.BO', 'WIPRO'],
+    'OFSS.NS': ['OFSS.BO'],
+    'MPHASIS.NS': ['MPHASIS.BO'],
+    'LTIM.NS': ['LTIM.BO', 'LTI.NS'],
+    'PERSISTENT.NS': ['PERSISTENT.BO'],
+    'TCS.NS': ['TCS.BO']
+}
+
+# Fetch historical data function with improved error handling and retries
 def fetch_data(stocks, start_date, end_date):
+    import time
+    import random
+    
     data = pd.DataFrame()
     failed_stocks = []
+    successful_stocks = []
     
-    for stock in stocks:
+    st.info(f"Fetching data for {len(stocks)} stocks from {start_date} to {end_date}...")
+    progress_bar = st.progress(0)
+    
+    for i, stock in enumerate(stocks):
         try:
-            stock_data = yf.download(stock, start=start_date, end=end_date, progress=False)
-            if not stock_data.empty and 'Open' in stock_data.columns:
-                data[stock] = stock_data['Open']
+            # Add small random delay to avoid rate limiting
+            time.sleep(random.uniform(0.1, 0.3))
+            
+            # Try multiple methods to fetch data
+            stock_data = None
+            
+            # Method 1: Standard download with different parameters
+            try:
+                stock_data = yf.download(stock, start=start_date, end=end_date, 
+                                       progress=False, auto_adjust=True, prepost=False, threads=True)
+            except:
+                pass
+            
+            # Method 2: Use Ticker object
+            if stock_data is None or stock_data.empty:
+                try:
+                    ticker = yf.Ticker(stock)
+                    stock_data = ticker.history(start=start_date, end=end_date, auto_adjust=True)
+                except:
+                    pass
+            
+            # Method 3: Try with period instead of dates
+            if stock_data is None or stock_data.empty:
+                try:
+                    ticker = yf.Ticker(stock)
+                    stock_data = ticker.history(period="1y", auto_adjust=True)
+                except:
+                    pass
+            
+            # Check if we got valid data
+            if stock_data is not None and not stock_data.empty:
+                # Try different price columns
+                price_col = None
+                if 'Open' in stock_data.columns:
+                    price_col = 'Open'
+                elif 'Close' in stock_data.columns:
+                    price_col = 'Close'
+                elif 'Adj Close' in stock_data.columns:
+                    price_col = 'Adj Close'
+                
+                if price_col is not None and not stock_data[price_col].empty:
+                    # Filter data to requested date range if needed
+                    stock_data = stock_data.loc[start_date:end_date]
+                    if not stock_data.empty:
+                        data[stock] = stock_data[price_col]
+                        successful_stocks.append(stock)
+                        st.success(f"✅ Successfully fetched data for {stock}")
+                    else:
+                        failed_stocks.append(stock)
+                        st.warning(f"⚠️ No data in date range for {stock}")
+                else:
+                    failed_stocks.append(stock)
+                    st.warning(f"⚠️ No price data available for {stock}")
             else:
                 failed_stocks.append(stock)
-                st.warning(f"No data found for {stock}")
+                st.warning(f"❌ Failed to fetch any data for {stock}")
+                
         except Exception as e:
             failed_stocks.append(stock)
-            st.warning(f"Failed to fetch data for {stock}: {str(e)}")
+            st.error(f"❌ Error fetching {stock}: {str(e)}")
+        
+        # Update progress
+        progress_bar.progress((i + 1) / len(stocks))
+    
+    progress_bar.empty()
     
     if data.empty:
-        st.error("No stock data could be fetched. Please check your internet connection and stock symbols.")
+        st.error("❌ No stock data could be fetched. This could be due to:")
+        st.write("- Yahoo Finance API issues (temporary)")
+        st.write("- Incorrect stock symbols")
+        st.write("- Network connectivity issues")
+        st.write("- Date range issues (try a different date range)")
+        st.write("")
+        st.write("**Suggestions:**")
+        st.write("1. Try again in a few minutes (API issues are often temporary)")
+        st.write("2. Check if the stock symbols are correct")
+        st.write("3. Try a different date range")
+        st.write("4. Check your internet connection")
         return pd.DataFrame()
     
-    if failed_stocks:
-        st.info(f"Could not fetch data for: {', '.join(failed_stocks)}")
+    st.success(f"✅ Successfully fetched data for {len(successful_stocks)} out of {len(stocks)} stocks")
     
-    # Forward fill any missing data
-    data = data.ffill().dropna()
+    if failed_stocks:
+        st.warning(f"⚠️ Could not fetch data for: {', '.join(failed_stocks)}")
+    
+    # Clean and process the data
+    if not data.empty:
+        # Remove any columns with all NaN values
+        data = data.dropna(axis=1, how='all')
+        
+        # Forward fill missing values
+        data = data.ffill()
+        
+        # Drop rows with any remaining NaN values
+        initial_rows = len(data)
+        data = data.dropna()
+        final_rows = len(data)
+        
+        if initial_rows > final_rows:
+            st.info(f"Removed {initial_rows - final_rows} rows with missing data")
     
     return data
 
@@ -245,7 +347,23 @@ def page_portfolio_optimization():
     with col2:
         end_date = st.date_input('End Date', value=pd.Timestamp.today())
     
-    if st.button('Run Optimization'):
+    # Add retry button and tips
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        run_button = st.button('🚀 Run Optimization', type="primary")
+    with col2:
+        retry_button = st.button('🔄 Retry with Different Settings')
+    
+    # Tips section
+    with st.expander("💡 Tips for Data Fetching Issues"):
+        st.write("**If you're getting 'No stock data could be fetched' error:**")
+        st.write("1. **Yahoo Finance API**: Sometimes has temporary issues - wait a few minutes and retry")
+        st.write("2. **Stock Symbols**: Make sure Indian stocks end with .NS (e.g., TCS.NS)")
+        st.write("3. **Date Range**: Try a different date range (avoid weekends/holidays)")
+        st.write("4. **Network**: Check your internet connection")
+        st.write("5. **Rate Limiting**: If multiple requests fail, wait 1-2 minutes before retrying")
+    
+    if run_button or retry_button:
         with st.spinner('Fetching data and optimizing portfolio...'):
             # Fetch historical data
             basedata = fetch_data(stocks, start_date.strftime('%Y-%m-%d'), 
