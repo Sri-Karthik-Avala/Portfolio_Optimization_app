@@ -1,13 +1,26 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.express as px
 from scipy.optimize import minimize
 import warnings
+from datetime import datetime, timedelta
+
+# Import NSE and Indian stock libraries
+try:
+    from nsepython import *
+    NSE_AVAILABLE = True
+except ImportError:
+    NSE_AVAILABLE = False
+    st.error("NSEPython not available. Install with: pip install nsepython")
+
+try:
+    import yfinance as yf
+    YFINANCE_AVAILABLE = True
+except ImportError:
+    YFINANCE_AVAILABLE = False
 
 warnings.filterwarnings('ignore')
-st.set_option('deprecation.showPyplotGlobalUse', False)
 
 # Stock configuration
 STOCKS = {
@@ -25,30 +38,7 @@ STOCKS = {
 
 INITIAL_INVESTMENT = 50000
 
-@st.cache_data
-def fetch_stock_data(start_date, end_date):
-    """Fetch stock data using yfinance"""
-    data = pd.DataFrame()
-    progress_bar = st.progress(0)
-    successful_stocks = []
-    
-    for i, (stock_key, stock_info) in enumerate(STOCKS.items()):
-        try:
-            stock_data = yf.download(
-                stock_info['symbol'], 
-                start=start_date, 
-                end=end_date, 
-                progress=False
-            )
-            
-            if not stock_data.empty and 'Close' in stock_data.columns:
-                data[stock_key] = stock_data['Close']
-                successful_stocks.append(stock_key)
-                
-        except Exception as e:
-            st.warning(f"Failed to fetch {stock_info['name']}: {str(e)}")
-        
-        progress_bar.progress((i + 1) / len(STOCKS))
+STOCKS))
     
     progress_bar.empty()
     
