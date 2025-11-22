@@ -1,212 +1,240 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
+import plotly.express as px
+from scipy.optimize import minimize
+import yfinance as yf
+from datetime import datetime
 
-# Set option to suppress matplotlib warnings
-st.set_option('deprecation.showPyplotGlobalUse', False)
+# --------------------------------------------------------------------
+# CONFIG
+# --------------------------------------------------------------------
+st.set_page_config(page_title="Portfolio Analyzer", page_icon="📈", layout="wide")
 
-# Define stocks
-stocks = ['HCLTECH.NS', 'ADANIENT.NS', 'TECHM.NS', 'INFY', 'WIPRO.NS', 
-          'OFSS.NS', 'MPHASIS.NS', 'LTIM.NS', 'PERSISTENT.NS', 'TCS.NS']
+INITIAL_INVESTMENT = 50000   # Per stock (as per your project)
 
-# Define initial investment per stock (0.1 of the overall budget)
-initial_budget = 500000
-initial_investment = 50000  # 50k INR initial investment per stock
+STOCKS = {
+    "HCLTECH.NS":  "HCL Technologies",
+    "ADANIENT.NS": "Adani Enterprises",
+    "TECHM.NS":    "Tech Mahindra",
+    "INFY.NS":     "Infosys",
+    "WIPRO.NS":    "Wipro",
+    "OFSS.NS":     "Oracle Financial Services",
+    "MPHASIS.NS":  "Mphasis",
+    "LTIM.NS":     "LTIMindtree",
+    "PERSISTENT.NS": "Persistent Systems",
+    "TCS.NS":      "Tata Consultancy Services"
+}
 
-# Function to fetch historical data for stocks
-def fetch_data(stocks, start_date, end_date):
+DEFAULT_START = "2024-06-03"   # As used in your PDF report
+DEFAULT_END = pd.Timestamp.today().strftime("%Y-%m-%d")
+
+
+# --------------------------------------------------------------------
+# FUNCTION — Robust NSE downloader
+# --------------------------------------------------------------------
+def fetch_data(symbols, start_date, end_date):
     data = pd.DataFrame()
-    for stock in stocks:
-        stock_data = yf.download(stock, start=start_date, end=end_date)
-        data[stock] = stock_data['Open']
-    return data
+    progress = st.progress(0)
 
-# Function to calculate portfolio value
-def PortfolioCalc(initial_investment, data):
-    # Calculate weights based on initial investment
-    weights = initial_investment / data.iloc[0]  # Divide initial investment by first day's prices
-    data['portfolio_value'] = np.sum(weights * data, axis=1)
-    return data, weights
+    for i, symbol in enumerate(symbols):
+        success = False
 
-# Function to calculate daily returns
+        for attempt in range(3):
+            try:
+                df = yf.download(
+                    symbol, 
+                    start=start_date, 
+                    end=end_date,
+                    progress=False,
+                    threads=False,
+                    timeout=30
+                )
+
+                if not df.empty:
+                    data[symbol] = df["Open"].astype(float)
+                    success = True
+                    break
+
+            except Exception as e:
+                st.write(f"Attempt {attempt+1} failed for {symbol}: {e}")
+
+        if not success:
+            st.error(f"❌ Could not fetch: {symbol}")
+
+        progress.progress((i + 1) / len(symbols))
+
+    progress.empty()
+
+    if data.empty:
+        st.error("No stock data downloaded. Please check date range or try later.")
+        return pd.DataFrame()
+
+    return data.ffill().dropna()
+
+
+# --------------------------------------------------------------------
+# CALCULATION FUNCTIONS
+# --------------------------------------------------------------------
+def calculate_portfolio_value(initial_investment, data):
+    weights = initial_investment / data.iloc[0]
+    portfolio_value = (data * weights).sum(axis=1)
+
+    df = data.copy()
+    df["portfolio_value"] = portfolio_value
+    return df, weights
+
+
 def calculate_daily_returns(data):
-    return data.pct_change(1)
+    return data.pct_change().dropna()
 
-# Function to calculate Sharpe ratio
-def calculate_sharpe_ratio(returns, risk_free_rate=0):
-    sharpe_ratio = (returns.mean() - risk_free_rate) / returns.std()
-    return sharpe_ratio
 
-# Function to calculate daily Sharpe ratios
+def calculate_sharpe_ratio(series):
+    if series.std() == 0:
+        return 0
+    return (series.mean()) / series.std()
+
+
 def calculate_daily_sharpe_ratios(returns):
-    sharpe_ratios = pd.DataFrame(index=returns.index, columns=returns.columns)
+    ratios = pd.DataFrame(index=returns.index, columns=returns.columns)
     for i in range(1, len(returns)):
-        daily_returns = returns.iloc[:i]
-        sharpe_ratios.iloc[i] = daily_returns.apply(calculate_sharpe_ratio, axis=0)
-    return sharpe_ratios
+        window = returns.iloc[:i]
+        ratios.iloc[i] = window.apply(calculate_sharpe_ratio, axis=0)
+    return ratios
 
-# Function to plot daily differences in Sharpe ratios
+
 def plot_daily_sharpe_differences(returns):
     daily_sharpe = returns.apply(calculate_sharpe_ratio, axis=1)
-    daily_sharpe_diff = daily_sharpe.diff()
-    plt.figure(figsize=(10, 6))
-    plt.plot(daily_sharpe_diff.index, daily_sharpe_diff.values, marker='o', linestyle='-')
-    plt.title('Daily Differences in Sharpe Ratios')
-    plt.xlabel('Date')
-    plt.ylabel('Difference in Sharpe Ratio')
-    plt.grid(True)
-    st.pyplot()
+    diff = daily_sharpe.diff()
+    fig = px.line(x=diff.index, y=diff.values,
+                  title="Daily Differences in Sharpe Ratios",
+                  labels={"x": "Date", "y": "Sharpe Δ"})
+    return fig
 
-# Function to plot portfolio weights over time
-def plot_portfolio_weights(data):
-    plt.figure(figsize=(10, 6))
-    for stock in stocks:
-        plt.plot(data.index, data[stock], label=stock)
-    plt.title('Portfolio Weights Over Time')
-    plt.xlabel('Date')
-    plt.ylabel('Weight')
-    plt.legend(loc='upper left')
-    plt.grid(True)
-    st.pyplot()
 
-# Function to plot daily weight changes in percentage
-def plot_daily_weight_changes(data):
-    daily_returns = data.pct_change()
-    plt.figure(figsize=(10, 6))
-    for stock in stocks:
-        plt.plot(daily_returns.index, daily_returns[stock] * 100, label=stock)
-    plt.title('Daily Weight Changes (%)')
-    plt.xlabel('Date')
-    plt.ylabel('Daily Weight Change (%)')
-    plt.legend(loc='upper left')
-    plt.grid(True)
-    st.pyplot()
+def optimize_portfolio(returns):
+    n = len(returns.columns)
+    mean_r = returns.mean()
+    cov = returns.cov()
 
-# Page 1: Homepage
-def page_home():
-    st.title('Welcome to Portfolio Analysis')
-    st.image('page1.png', use_column_width=True)
-    st.write('This is the homepage of the Portfolio Analysis app.')
+    def neg_sharpe(weights):
+        ret = np.dot(weights, mean_r)
+        vol = np.sqrt(np.dot(weights.T, np.dot(cov, weights)))
+        return -(ret / vol) if vol != 0 else 999
 
-# Page 2: Portfolio Optimization
-def page_portfolio_optimization():
-    st.title('Portfolio Optimization')
-    st.image('page2.png', use_column_width=True)
-    
-    # Select end date (today's date)
-    end_date = pd.Timestamp.today().strftime('%Y-%m-%d')
-    
-    # Display selected stocks
-    st.subheader('Selected Stocks')
-    st.write(stocks)
-    
-    # Fetch historical data
-    basedata = fetch_data(stocks, '2024-06-01', end_date)  # Adjust start date as needed
-    
-    # Forward fill any missing data
-    basedata = basedata.ffill()
-    
-    # Calculate portfolio values and weights
-    basedata, weights = PortfolioCalc(initial_investment, basedata)
-    
-    # Convert weights to DataFrame
-    weights_df = pd.DataFrame(weights.values, index=weights.index, columns=['Weight'])
-    
-    # Plot portfolio value
-    st.subheader('Portfolio Value Over Time')
-    plt.figure(figsize=(10, 6))
-    plt.plot(basedata.index, basedata['portfolio_value'], label='Portfolio Value')
-    plt.xlabel('Date')
-    plt.ylabel('Portfolio Value')
-    plt.legend()
-    st.pyplot()
+    initial = np.ones(n) / n
+    bounds = [(0, 1)] * n
+    cons = {"type": "eq", "fun": lambda w: np.sum(w) - 1}
 
-    # Display table of data
-    st.subheader('Portfolio Data')
-    st.write(basedata)
+    result = minimize(neg_sharpe, initial, bounds=bounds, constraints=cons)
 
-    # Display weights table
-    st.subheader('First Change Stock Quantities Table')
-    st.write(weights_df)
+    if result.success:
+        return result.x
+    return initial
 
-# Updated Analysis page function
-def page_analysis():
-    st.title('Analysis')
-    st.image('page3.png', use_column_width=True)
-    
-    # Select end date (today's date)
-    end_date = pd.Timestamp.today().strftime('%Y-%m-%d')
-    
-    # Fetch historical data
-    basedata = fetch_data(stocks, '2024-06-01', end_date)  # Adjust start date as needed
-    
-    # Forward fill any missing data
-    basedata = basedata.ffill()
-    
-    # Calculate daily returns
-    returns = calculate_daily_returns(basedata)
-    
-    # Calculate portfolio values and weights
-    basedata, weights = PortfolioCalc(initial_investment, basedata)
-    
-    # Record daily changes in allocation
-    daily_changes = basedata[stocks].diff() * weights.values[0]
-    daily_change_in_allocation = pd.DataFrame(daily_changes, columns=stocks)
-    
-    # Calculate daily Sharpe ratios for each stock
-    daily_sharpe_ratios_df = calculate_daily_sharpe_ratios(returns)
-    
-    # Plot daily differences in Sharpe ratios
-    st.subheader('Daily Differences in Sharpe Ratios')
-    plot_daily_sharpe_differences(returns)
-    
-    # Plot portfolio weights over time
-    st.subheader('Portfolio Weights Over Time')
-    plot_portfolio_weights(basedata)
-    
-    # Plot daily weight changes in percentage
-    st.subheader('Daily Weight Changes (%)')
-    plot_daily_weight_changes(basedata)
-    
-    # Display weights table
-    st.subheader('First Change Stock Quantities Table')
-    initial_weights = initial_investment / basedata.iloc[0]
-    weights_df = pd.DataFrame(initial_weights.values, index=initial_weights.index, columns=['Initial Weight'])
-    st.write(weights_df)
-    
-    # Display daily changes in allocation as a DataFrame
-    st.subheader('Daily Change in Allocation')
-    st.write(daily_change_in_allocation)
-    
-    # Display Sharpe ratios table for all companies over time
-    st.subheader('Sharpe Ratios for All Companies (Daily)')
-    st.write(daily_sharpe_ratios_df)
-    
-    # Display all tables
-    st.subheader('Extra Values')
-    st.write('Returns Data:')
-    st.write(returns)
-    st.write('Change in Stock Price Data:')
-    st.write(basedata)
 
-# Main function to control page navigation
-def main():
-    pages = {
-        "Homepage": page_home,
-        "Portfolio Optimization": page_portfolio_optimization,
-        "Analysis": page_analysis,
-    }
+# --------------------------------------------------------------------
+# PAGES
+# --------------------------------------------------------------------
+def home_page():
+    st.title("📈 Portfolio Analyzer – Rebuilt Version")
+    st.markdown("""
+    This is a **fresh, fully optimized, and cloud-stable version** of your
+    Portfolio Optimization App (based on your project report).
 
-    st.set_page_config(page_title='Portfolio Analysis App', layout='wide', page_icon=None, initial_sidebar_state='auto')
+    ### Features
+    - Robust NSE data fetching  
+    - Portfolio Optimization (Mean-Variance)  
+    - Sharpe Ratio Analysis  
+    - Weight Dynamics & Portfolio Value  
+    - Date Range: *03-06-2024 → Today*  
+    - Investment: ₹50,000 per stock  
 
-    st.sidebar.title('Navigation')
-    selection = st.sidebar.radio("Go to", list(pages.keys()))
+    Use the sidebar to navigate.
+    """)
 
-    page = pages[selection]
-    page()
 
-if __name__ == '__main__':
-    main()
+def optimization_page():
+    st.title("🎯 Portfolio Optimization")
+
+    start_date = st.date_input("Start Date", pd.to_datetime(DEFAULT_START))
+    end_date = st.date_input("End Date", pd.to_datetime(DEFAULT_END))
+
+    if st.button("🚀 Run Optimization"):
+        with st.spinner("Fetching Data..."):
+            data = fetch_data(list(STOCKS.keys()), start_date, end_date)
+
+        if data.empty:
+            return
+
+        returns = calculate_daily_returns(data)
+
+        st.subheader("Optimal Weights")
+        opt_weights = optimize_portfolio(returns)
+
+        df = pd.DataFrame({
+            "Stock": list(STOCKS.values()),
+            "Ticker": list(STOCKS.keys()),
+            "Weight": opt_weights,
+            "Weight (%)": opt_weights * 100
+        })
+
+        st.dataframe(df, use_container_width=True)
+
+        fig = px.pie(df, names="Ticker", values="Weight (%)",
+                     title="Optimized Allocation")
+        st.plotly_chart(fig)
+
+        portfolio_df, weights = calculate_portfolio_value(INITIAL_INVESTMENT, data)
+
+        fig2 = px.line(
+            x=portfolio_df.index,
+            y=portfolio_df["portfolio_value"],
+            title="Portfolio Value Over Time"
+        )
+        st.plotly_chart(fig2)
+
+
+def analysis_page():
+    st.title("📊 Portfolio Analysis")
+
+    start_date = pd.to_datetime(DEFAULT_START)
+    end_date = pd.to_datetime(DEFAULT_END)
+
+    with st.spinner("Loading Data..."):
+        data = fetch_data(list(STOCKS.keys()), start_date, end_date)
+
+    if data.empty:
+        return
+
+    returns = calculate_daily_returns(data)
+    portfolio_df, weights = calculate_portfolio_value(INITIAL_INVESTMENT, data)
+    daily_sharpe = calculate_daily_sharpe_ratios(returns)
+
+    st.subheader("Daily Sharpe Ratio Δ")
+    st.plotly_chart(plot_daily_sharpe_differences(returns))
+
+    st.subheader("Daily Returns")
+    st.plotly_chart(px.line(returns, title="Daily Returns of Stocks"))
+
+    st.subheader("Initial Weights (Based on Opening Day Price)")
+    st.write(weights)
+
+    st.subheader("Portfolio Value Data")
+    st.dataframe(portfolio_df)
+
+
+# --------------------------------------------------------------------
+# MAIN ROUTER
+# --------------------------------------------------------------------
+pages = {
+    "Home": home_page,
+    "Portfolio Optimization": optimization_page,
+    "Analysis": analysis_page
+}
+
+with st.sidebar:
+    st.title("🧭 Navigation")
+    choice = st.radio("Go to:", list(pages.keys()))
+
+pages[choice]()
