@@ -4,25 +4,14 @@ import numpy as np
 import plotly.express as px
 from scipy.optimize import minimize
 import warnings
-from datetime import datetime, timedelta
-
-# Import NSE and Indian stock libraries
-try:
-    from nsepython import *
-    NSE_AVAILABLE = True
-except ImportError:
-    NSE_AVAILABLE = False
-    st.error("NSEPython not available. Install with: pip install nsepython")
-
-try:
-    import yfinance as yf
-    YFINANCE_AVAILABLE = True
-except ImportError:
-    YFINANCE_AVAILABLE = False
+from datetime import datetime
+import yfinance as yf   # Streamlit Cloud supports this
 
 warnings.filterwarnings('ignore')
 
-# Stock configuration
+# -----------------------
+# STOCK CONFIG
+# -----------------------
 STOCKS = {
     'RELIANCE': {'name': 'Reliance Industries', 'symbol': 'RELIANCE.NS'},
     'TCS': {'name': 'Tata Consultancy Services', 'symbol': 'TCS.NS'},
@@ -38,267 +27,185 @@ STOCKS = {
 
 INITIAL_INVESTMENT = 50000
 
-STOCKS))
-    
-    progress_bar.empty()
-    
-    if not data.empty:
-        data = data.dropna()
-        st.success(f"Successfully fetched data for {len(successful_stocks)} stocks")
-    
-    return data
+# -----------------------
+# FETCH STOCK DATA
+# -----------------------
+def fetch_stock_data(start_date, end_date):
+    """Fetch stock data from Yahoo Finance."""
+    data = pd.DataFrame()
+    progress = st.progress(0)
 
-def calculate_portfolio_metrics(data, initial_investment):
-    """Calculate portfolio weights and values"""
+    symbols = [v['symbol'] for v in STOCKS.values()]
+    for i, symbol in enumerate(symbols):
+        try:
+            df = yf.download(symbol, start=start_date, end=end_date)['Close']
+            data[symbol] = df
+        except Exception as e:
+            st.warning(f"Couldn't fetch data for {symbol}: {e}")
+
+        progress.progress((i + 1) / len(symbols))
+
+    progress.empty()
+
     if data.empty:
-        return pd.DataFrame(), pd.Series()
-    
-    # Calculate equal-weight shares based on initial prices
+        return pd.DataFrame()
+
+    return data.dropna()
+
+# -----------------------
+# PORTFOLIO CALCULATIONS
+# -----------------------
+def calculate_portfolio_metrics(data, initial_investment):
+    if data.empty:
+        return pd.Series(), pd.Series()
+
     first_prices = data.iloc[0]
-    shares_per_stock = initial_investment / first_prices
-    
-    # Calculate daily portfolio value
-    portfolio_values = (data * shares_per_stock).sum(axis=1)
-    
-    return portfolio_values, shares_per_stock
+    shares = initial_investment / first_prices
+    portfolio_values = (data * shares).sum(axis=1)
+    return portfolio_values, shares
 
 def calculate_returns(data):
-    """Calculate daily returns"""
     return data.pct_change().dropna()
 
-def calculate_sharpe_ratio(returns, risk_free_rate=0.0):
-    """Calculate Sharpe ratio"""
+def calculate_sharpe_ratio(returns, rf=0.0):
     if returns.std() == 0:
         return 0
-    return (returns.mean() - risk_free_rate) / returns.std()
+    return (returns.mean() - rf) / returns.std()
 
 def optimize_portfolio(returns):
-    """Optimize portfolio using mean-variance optimization"""
     if returns.empty:
         return np.array([])
-    
-    n_assets = len(returns.columns)
-    mean_returns = returns.mean()
-    cov_matrix = returns.cov()
-    
-    def negative_sharpe(weights):
-        portfolio_return = np.dot(weights, mean_returns)
-        portfolio_var = np.dot(weights.T, np.dot(cov_matrix, weights))
-        portfolio_std = np.sqrt(portfolio_var)
-        
-        if portfolio_std == 0:
-            return 1000
-        
-        sharpe = portfolio_return / portfolio_std
-        return -sharpe
-    
-    # Constraints and bounds
-    constraints = {'type': 'eq', 'fun': lambda w: np.sum(w) - 1}
-    bounds = tuple((0, 1) for _ in range(n_assets))
-    initial_weights = np.array([1/n_assets] * n_assets)
-    
-    try:
-        result = minimize(
-            negative_sharpe,
-            initial_weights,
-            method='SLSQP',
-            bounds=bounds,
-            constraints=constraints
-        )
-        
-        if result.success:
-            return result.x
-        else:
-            return initial_weights
-            
-    except Exception:
-        return initial_weights
 
+    n = len(returns.columns)
+    mean_r = returns.mean()
+    cov = returns.cov()
+
+    def neg_sharpe(weights):
+        ret = np.dot(weights, mean_r)
+        vol = np.sqrt(np.dot(weights.T, np.dot(cov, weights)))
+        if vol == 0:
+            return 1000
+        return -(ret / vol)
+
+    initial = np.ones(n) / n
+    bounds = [(0, 1)] * n
+    cons = {'type': 'eq', 'fun': lambda w: np.sum(w) - 1}
+
+    try:
+        res = minimize(neg_sharpe, initial, bounds=bounds, constraints=cons)
+        if res.success:
+            return res.x
+    except:
+        pass
+
+    return initial
+
+# -----------------------
+# PAGES
+# -----------------------
 def page_home():
     st.title('📈 Portfolio Analysis Dashboard')
     st.markdown("""
-    ### Welcome to the Indian Stock Portfolio Analyzer
-    
-    This application helps you analyze and optimize your investment portfolio using top Indian stocks.
-    
-    **Features:**
-    - Portfolio optimization using Modern Portfolio Theory
-    - Real-time stock data from Yahoo Finance
-    - Interactive charts and analysis
-    - Sharpe ratio calculations
-    
-    **Current Portfolio:** Top 10 Indian stocks including Reliance, TCS, Infosys, HDFC Bank, and more.
-    
-    Use the sidebar to navigate between sections.
+    Welcome to the Indian Stock Portfolio Analyzer!
+
+    **What you get here:**
+    - Live stock data
+    - Portfolio optimization (Modern Portfolio Theory)
+    - Sharpe ratio insights
+    - Interactive charts
     """)
 
 def page_optimization():
-    st.title('🎯 Portfolio Optimization')
-    
-    # Date inputs
+    st.title("🎯 Portfolio Optimization")
+
     col1, col2 = st.columns(2)
-    with col1:
-        start_date = st.date_input('Start Date', value=pd.to_datetime('2023-01-01'))
-    with col2:
-        end_date = st.date_input('End Date', value=pd.Timestamp.today())
-    
-    if st.button('🚀 Optimize Portfolio', type='primary'):
-        with st.spinner('Fetching data and optimizing...'):
-            # Fetch data
-            data = fetch_stock_data(start_date, end_date)
-            
-            if data.empty:
-                st.error("No data available for the selected date range.")
-                return
-            
-            # Calculate returns
-            returns = calculate_returns(data)
-            
-            # Optimize portfolio
-            optimal_weights = optimize_portfolio(returns)
-            
-            if len(optimal_weights) > 0:
-                # Display results
-                st.subheader('📊 Optimal Portfolio Weights')
-                
-                weights_df = pd.DataFrame({
-                    'Stock': [STOCKS[stock]['name'] for stock in data.columns],
-                    'Symbol': list(data.columns),
-                    'Weight': optimal_weights,
-                    'Weight (%)': optimal_weights * 100
-                }).round(4)
-                
-                st.dataframe(weights_df, use_container_width=True)
-                
-                # Pie chart of weights
-                fig_pie = px.pie(
-                    weights_df, 
-                    values='Weight (%)', 
-                    names='Symbol',
-                    title='Optimal Portfolio Allocation'
-                )
-                st.plotly_chart(fig_pie)
-                
-                # Portfolio performance
-                portfolio_values, shares = calculate_portfolio_metrics(data, INITIAL_INVESTMENT)
-                
-                if not portfolio_values.empty:
-                    fig_performance = px.line(
-                        x=portfolio_values.index,
-                        y=portfolio_values.values,
-                        title='Portfolio Performance Over Time',
-                        labels={'x': 'Date', 'y': 'Portfolio Value (₹)'}
-                    )
-                    st.plotly_chart(fig_performance)
-                    
-                    # Performance metrics
-                    initial_value = portfolio_values.iloc[0]
-                    final_value = portfolio_values.iloc[-1]
-                    total_return = ((final_value - initial_value) / initial_value) * 100
-                    
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric('Initial Value', f'₹{initial_value:,.0f}')
-                    with col2:
-                        st.metric('Final Value', f'₹{final_value:,.0f}')
-                    with col3:
-                        st.metric('Total Return', f'{total_return:.2f}%')
+    start = col1.date_input("Start Date", value=pd.to_datetime("2023-01-01"))
+    end = col2.date_input("End Date", value=pd.Timestamp.today())
+
+    if st.button("🚀 Optimize Portfolio"):
+        with st.spinner("Fetching data..."):
+            data = fetch_stock_data(start, end)
+
+        if data.empty:
+            st.error("No data found.")
+            return
+
+        returns = calculate_returns(data)
+        weights = optimize_portfolio(returns)
+
+        st.subheader("📊 Optimal Portfolio Weights")
+        df = pd.DataFrame({
+            "Stock": [v['name'] for v in STOCKS.values()],
+            "Symbol": list(data.columns),
+            "Weight": weights,
+            "Weight (%)": weights * 100
+        })
+        st.dataframe(df, use_container_width=True)
+
+        fig = px.pie(df, values="Weight (%)", names="Symbol", title="Optimal Allocation")
+        st.plotly_chart(fig)
+
+        # Portfolio performance
+        portfolio_values, _ = calculate_portfolio_metrics(data, INITIAL_INVESTMENT)
+
+        fig_line = px.line(
+            x=portfolio_values.index,
+            y=portfolio_values.values,
+            title='Portfolio Value Over Time'
+        )
+        st.plotly_chart(fig_line)
+
+        st.metric("Initial Value", f"₹{portfolio_values.iloc[0]:,.0f}")
+        st.metric("Final Value", f"₹{portfolio_values.iloc[-1]:,.0f}")
+        st.metric("Total Return", f"{((portfolio_values.iloc[-1]/portfolio_values.iloc[0])-1)*100:.2f}%")
 
 def page_analysis():
-    st.title('📈 Portfolio Analysis')
-    
-    # Date inputs
-    col1, col2 = st.columns(2)
-    with col1:
-        start_date = st.date_input('Analysis Start Date', value=pd.to_datetime('2023-01-01'))
-    with col2:
-        end_date = st.date_input('Analysis End Date', value=pd.Timestamp.today())
-    
-    if st.button('📊 Run Analysis', type='primary'):
-        with st.spinner('Analyzing portfolio...'):
-            # Fetch data
-            data = fetch_stock_data(start_date, end_date)
-            
-            if data.empty:
-                st.error("No data available for analysis.")
-                return
-            
-            # Calculate returns
-            returns = calculate_returns(data)
-            
-            # Stock prices chart
-            st.subheader('📈 Stock Prices Over Time')
-            fig_prices = px.line(
-                data,
-                title='Stock Prices',
-                labels={'index': 'Date', 'value': 'Price (₹)'}
-            )
-            st.plotly_chart(fig_prices)
-            
-            # Daily returns chart
-            st.subheader('📊 Daily Returns')
-            fig_returns = px.line(
-                returns,
-                title='Daily Returns (%)',
-                labels={'index': 'Date', 'value': 'Return (%)'}
-            )
-            st.plotly_chart(fig_returns)
-            
-            # Sharpe ratios
-            st.subheader('⚡ Risk-Return Analysis')
-            
-            sharpe_ratios = {}
-            for stock in returns.columns:
-                sharpe_ratios[stock] = calculate_sharpe_ratio(returns[stock])
-            
-            sharpe_df = pd.DataFrame({
-                'Stock': [STOCKS[stock]['name'] for stock in sharpe_ratios.keys()],
-                'Symbol': list(sharpe_ratios.keys()),
-                'Sharpe Ratio': list(sharpe_ratios.values())
-            }).sort_values('Sharpe Ratio', ascending=False)
-            
-            fig_sharpe = px.bar(
-                sharpe_df,
-                x='Symbol',
-                y='Sharpe Ratio',
-                title='Sharpe Ratios by Stock',
-                color='Sharpe Ratio',
-                color_continuous_scale='viridis'
-            )
-            st.plotly_chart(fig_sharpe)
-            
-            # Summary statistics
-            st.subheader('📋 Summary Statistics')
-            
-            summary_stats = pd.DataFrame({
-                'Stock': [STOCKS[stock]['name'] for stock in returns.columns],
-                'Mean Daily Return (%)': (returns.mean() * 100).round(4),
-                'Volatility (%)': (returns.std() * 100).round(4),
-                'Sharpe Ratio': [sharpe_ratios[stock] for stock in returns.columns]
-            }).round(4)
-            
-            st.dataframe(summary_stats, use_container_width=True)
+    st.title("📊 Portfolio Analysis")
 
+    col1, col2 = st.columns(2)
+    start = col1.date_input("Start Date", pd.to_datetime("2023-01-01"))
+    end = col2.date_input("End Date", pd.Timestamp.today())
+
+    if st.button("📈 Run Analysis"):
+        with st.spinner("Fetching..."):
+            data = fetch_stock_data(start, end)
+
+        if data.empty:
+            st.error("No data available.")
+            return
+
+        returns = calculate_returns(data)
+
+        st.subheader("📈 Price Chart")
+        st.plotly_chart(px.line(data, title="Stock Prices"))
+
+        st.subheader("📊 Daily Returns")
+        st.plotly_chart(px.line(returns, title="Daily Returns"))
+
+        st.subheader("⚡ Sharpe Ratios")
+        sharpe = {col: calculate_sharpe_ratio(returns[col]) for col in returns.columns}
+
+        df = pd.DataFrame({
+            "Stock": [STOCKS[s]['name'] for s in sharpe.keys()],
+            "Symbol": list(sharpe.keys()),
+            "Sharpe Ratio": list(sharpe.values())
+        })
+
+        st.plotly_chart(px.bar(df, x="Symbol", y="Sharpe Ratio", title="Sharpe Ratios"))
+
+# -----------------------
+# MAIN
+# -----------------------
 def main():
-    st.set_page_config(
-        page_title='Portfolio Analysis',
-        page_icon='📈',
-        layout='wide'
-    )
-    
-    # Sidebar navigation
-    st.sidebar.title('🧭 Navigation')
-    page = st.sidebar.radio(
-        'Select Page:',
-        ['Homepage', 'Portfolio Optimization', 'Analysis']
-    )
-    
-    # Route to pages
-    if page == 'Homepage':
+    st.set_page_config(page_title="Portfolio Analysis", page_icon="📈", layout="wide")
+
+    page = st.sidebar.radio("Navigate", ["Homepage", "Portfolio Optimization", "Analysis"])
+
+    if page == "Homepage":
         page_home()
-    elif page == 'Portfolio Optimization':
+    elif page == "Portfolio Optimization":
         page_optimization()
-    elif page == 'Analysis':
+    else:
         page_analysis()
 
 if __name__ == '__main__':
